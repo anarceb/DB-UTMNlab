@@ -5,7 +5,7 @@ from database.db import execute_query
 import psycopg2
 import time
 from database.db import get_db_connection, execute_query
-
+import traceback  
 
 # Добавляем импорты для Документов и
 from documents.access_control import (
@@ -475,16 +475,17 @@ def documents_list():
         
         # ОСОБЫЙ СЛУЧАЙ: Если пользователь начальник отдела, но имеет роль auditor
         # Проверяем, является ли пользователь начальником отдела
-        is_manager = execute_query("""
-            SELECT COUNT(*) as count 
-            FROM departments 
-            WHERE manager_id = %s
-        """, (user_id,))
-        
-        if is_manager and is_manager[0]['count'] > 0:
-            # Пользователь является начальником отдела
-            user_role = 'department_manager'
-            session['user_role'] = 'department_manager'
+        if user_role == 'auditor':
+            is_manager = execute_query("""
+                SELECT COUNT(*) as count 
+                FROM departments 
+                WHERE manager_id = %s
+            """, (user_id,))
+            
+            if is_manager and is_manager[0]['count'] > 0:
+                # Пользователь является начальником отдела
+                user_role = 'department_manager'
+                session['user_role'] = 'department_manager'
         
         print(f"DEBUG: Final user_role={user_role}, user_dept_id={user_dept_id}")
         
@@ -625,10 +626,20 @@ def download_document(document_id):
                 return redirect(url_for('documents_list', 
                                       error=f"Файл не найден: {document['file_name']}"))
         
+        # ИСПРАВЛЕНО: Обеспечиваем правильное расширение при скачивании
+        download_name = document['file_name']
+        
+        # Проверяем есть ли расширение в имени
+        if not os.path.splitext(download_name)[1]:
+            # Если нет расширения, добавляем его из файла
+            file_ext = os.path.splitext(file_path)[1]
+            if file_ext:
+                download_name = f"{download_name}{file_ext}"
+        
         # Отправляем файл для скачивания
         return send_file(file_path, 
                         as_attachment=True,
-                        download_name=document['file_name'])
+                        download_name=download_name)
                         
     except Exception as e:
         print(f"Error downloading document: {e}")
@@ -643,7 +654,8 @@ def add_document():
         user_role = session.get('user_role')
         user_dept_id = get_user_department(user_id)
         
-        if user_role not in ['department_manager', 'hr_manager', 'company_director', 'db_admin']:
+        # Добавляем 'auditor' в список ролей с правом добавления документов
+        if user_role not in ['department_manager', 'hr_manager', 'company_director', 'db_admin', 'auditor']:
             return render_template('shared/access_denied.html', 
                                  error="Недостаточно прав для добавления документов")
         
@@ -651,14 +663,16 @@ def add_document():
         employees = execute_query("SELECT employee_id, full_name FROM employees WHERE is_active = true ORDER BY full_name")
         policies = execute_query("SELECT policy_id, policy_number FROM policies ORDER BY policy_number")
         
+        # Для аудитора устанавливаем отдел безопасности (4) по умолчанию
+        if user_role == 'auditor':
+            user_dept_id = 4  # Отдел безопасности
+            session['user_dept_id'] = 4
+        
+        if not user_dept_id and departments:
+            user_dept_id = departments[0]['department_id']
+        
         if request.method == 'POST':
-            print(f"DEBUG: Request method: POST")
-            print(f"DEBUG: Request files: {request.files}")
-            print(f"DEBUG: Request form: {request.form}")
-            
-            # Обработка загрузки файла
             if 'document_file' not in request.files:
-                print(f"DEBUG: No document_file in request.files")
                 return render_template('company_director/documents/add_document.html',
                                     departments=departments,
                                     employees=employees,
@@ -666,12 +680,8 @@ def add_document():
                                     error="Файл не выбран")
             
             file = request.files['document_file']
-            print(f"DEBUG: File object: {file}")
-            print(f"DEBUG: File filename: {file.filename}")
-            print(f"DEBUG: File content type: {file.content_type if hasattr(file, 'content_type') else 'No content type'}")
             
             if file.filename == '':
-                print(f"DEBUG: Empty filename")
                 return render_template('company_director/documents/add_document.html',
                                     departments=departments,
                                     employees=employees,
@@ -679,7 +689,6 @@ def add_document():
                                     error="Файл не выбран")
             
             if file and not allowed_file(file.filename):
-                print(f"DEBUG: File not allowed: {file.filename}")
                 return render_template('company_director/documents/add_document.html',
                                     departments=departments,
                                     employees=employees,
@@ -688,17 +697,26 @@ def add_document():
             
             # Получаем данные из формы
             file_name = request.form.get('file_name', '').strip() or file.filename
-            print(f"DEBUG: Form file_name: {request.form.get('file_name')}")
-            print(f"DEBUG: Using file_name: {file_name}")
-            
             description = request.form.get('description', '').strip()
             confidentiality_level = request.form.get('confidentiality_level', '0')
             policy_id = request.form.get('policy_id') or None
+            
             created_by_employee_id = request.form.get('created_by_employee_id', user_id)
             created_in_department_id = request.form.get('created_in_department_id', user_dept_id)
             
-            print(f"DEBUG: Form data - confidentiality_level: {confidentiality_level}, "
-                  f"dept_id: {created_in_department_id}, employee_id: {created_by_employee_id}")
+            # ОСОБЫЙ СЛУЧАЙ: Для аудитора проверяем, что отдел = 4 (безопасность)
+            if user_role == 'auditor':
+                # Если аудитор выбрал другой отдел - игнорируем и ставим отдел безопасности
+                if created_in_department_id != '4':
+                    created_in_department_id = 4
+                    print(f"DEBUG: Auditor tried to select department {request.form.get('created_in_department_id')}, but forced to department 4")
+            
+            # Проверяем department_id
+            if not created_in_department_id:
+                if departments:
+                    created_in_department_id = departments[0]['department_id']
+                else:
+                    created_in_department_id = 1
             
             # Валидация
             if not file_name:
@@ -708,16 +726,24 @@ def add_document():
                                     policies=policies,
                                     error="Название файла обязательно")
             
-            # Сохраняем файл С ОРИГИНАЛЬНЫМ ИМЕНЕМ
-            print(f"DEBUG: Calling save_document_file...")
+            # Конвертируем типы
+            try:
+                department_id_int = int(created_in_department_id)
+                confidentiality_level_int = int(confidentiality_level)
+            except ValueError:
+                return render_template('company_director/documents/add_document.html',
+                                    departments=departments,
+                                    employees=employees,
+                                    policies=policies,
+                                    error="Неверный формат данных")
+            
+            # Сохраняем файл
             stored_file_path, saved_filename, file_size = save_document_file(
                 file, 
-                int(created_in_department_id), 
-                int(confidentiality_level),
+                department_id_int, 
+                confidentiality_level_int,
                 use_original_name=True
             )
-            
-            print(f"DEBUG: save_document_file returned: {stored_file_path}, {saved_filename}, {file_size}")
             
             if not stored_file_path:
                 return render_template('company_director/documents/add_document.html',
@@ -729,8 +755,8 @@ def add_document():
             # Проверяем, что файл физически существует
             upload_folder = get_upload_folder()
             full_path = os.path.join(upload_folder, stored_file_path)
+            
             if not os.path.exists(full_path):
-                print(f"DEBUG: ERROR: File doesn't exist at {full_path}")
                 return render_template('company_director/documents/add_document.html',
                                     departments=departments,
                                     employees=employees,
@@ -745,13 +771,11 @@ def add_document():
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """
             
-            print(f"DEBUG: Executing DB insert...")
             execute_query(insert_query, (
-                policy_id, created_by_employee_id, created_in_department_id,
-                file_name, description, stored_file_path, file_size, confidentiality_level
+                policy_id, created_by_employee_id, department_id_int,
+                file_name, description, stored_file_path, file_size, confidentiality_level_int
             ), fetch=False)
             
-            print(f"DEBUG: Document added successfully!")
             return redirect(url_for('documents_list', success="Документ успешно добавлен"))
         
         return render_template('company_director/documents/add_document.html',
@@ -761,14 +785,12 @@ def add_document():
                             
     except Exception as e:
         print(f"ERROR in add_document: {e}")
-        import traceback
         traceback.print_exc()
         return render_template('company_director/documents/add_document.html',
                             departments=departments,
                             employees=employees,
                             policies=policies,
                             error=f"Ошибка при добавлении документа: {str(e)}")
-    
 
 @app.route('/documents/<int:document_id>/edit', methods=['GET', 'POST'])
 @login_required

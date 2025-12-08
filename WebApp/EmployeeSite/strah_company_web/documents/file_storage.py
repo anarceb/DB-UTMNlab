@@ -7,6 +7,8 @@ import uuid
 from werkzeug.utils import secure_filename
 from database.db import execute_query  # Добавляем импорт
 from config import allowed_file
+import datetime
+import traceback  
 
 def get_upload_folder():
     """Возвращает путь к папке для загрузки файлов"""
@@ -40,116 +42,129 @@ def get_public_folder():
     os.makedirs(public_folder, exist_ok=True)
     return public_folder
 
-def save_document_file(file, department_id, confidentiality_level, document_id=None, use_original_name=True):
+def save_document_file(file, department_id, confidentiality_level, document_id=None, use_custom_name=None):
     """
     Сохраняет файл документа в соответствующую папку
+    use_custom_name: если указано, использует это имя вместо оригинального
     """
     try:
-        if file and file.filename:
-            print(f"DEBUG: Original filename: {file.filename}")
-            print(f"DEBUG: File type: {type(file)}")
-            print(f"DEBUG: Has filename: {hasattr(file, 'filename')}")
-            
-            # Безопасное имя файла
-            original_filename = secure_filename(file.filename)
-            print(f"DEBUG: Secure filename: {original_filename}")
-            
-            if not original_filename or original_filename == '':
-                # Генерируем имя на основе текущего времени
-                import datetime
-                original_filename = f"document_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                print(f"DEBUG: Generated filename: {original_filename}")
-            
-            file_extension = os.path.splitext(original_filename)[1]
-            print(f"DEBUG: File extension: {file_extension}")
-            
-            if not file_extension:
-                # Определяем расширение по типу содержимого
-                if hasattr(file, 'content_type'):
-                    mime_to_ext = {
-                        'application/pdf': '.pdf',
-                        'application/msword': '.doc',
-                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-                        'application/vnd.ms-excel': '.xls',
-                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-                        'image/jpeg': '.jpg',
-                        'image/png': '.png',
-                        'text/plain': '.txt',
-                    }
-                    file_extension = mime_to_ext.get(file.content_type, '.bin')
-                    print(f"DEBUG: Detected extension from MIME: {file_extension}")
-            
-            # Генерируем имя файла
-            if use_original_name:
-                base_name = os.path.splitext(original_filename)[0]
-                if not base_name or base_name == '':
-                    base_name = f"document_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                
-                filename = f"{base_name}{file_extension}"
-                
-                # Проверяем существование
-                counter = 1
-                # Определяем папку для проверки
-                if confidentiality_level == 0:
-                    check_folder = get_public_folder()
-                else:
-                    check_folder = get_department_folder(department_id)
-                
-                # Если файл существует, добавляем номер
-                while os.path.exists(os.path.join(check_folder, filename)):
-                    filename = f"{base_name}_{counter}{file_extension}"
-                    counter += 1
+        if file is None or not hasattr(file, 'filename') or not file.filename:
+            return None, None, None
+        
+        try:
+            if department_id is None:
+                department_id = 1
+            department_id = int(department_id)
+            confidentiality_level = int(confidentiality_level)
+        except (ValueError, TypeError):
+            return None, None, None
+        
+        # ИСПРАВЛЕНО: Используем кастомное имя если указано, иначе оригинальное
+        if use_custom_name:
+            # Кастомное имя из формы
+            original_filename = use_custom_name
+            # Добавляем расширение если его нет
+            if not os.path.splitext(original_filename)[1]:
+                # Берем расширение из оригинального файла
+                orig_ext = os.path.splitext(file.filename)[1]
+                original_filename = f"{original_filename}{orig_ext}"
+        else:
+            # Оригинальное имя файла
+            original_filename = file.filename
+        
+        # Безопасное имя файла
+        safe_filename = secure_filename(original_filename)
+        
+        # Если после secure_filename имя стало пустым
+        if not safe_filename or safe_filename == '':
+            safe_filename = f"document_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Определяем расширение из безопасного имени
+        file_extension = os.path.splitext(safe_filename)[1].lower()
+        
+        # Если нет расширения, определяем его
+        if not file_extension:
+            if hasattr(file, 'content_type'):
+                mime_to_ext = {
+                    'application/pdf': '.pdf',
+                    'application/msword': '.doc',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                    'application/vnd.ms-excel': '.xls',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+                    'image/jpeg': '.jpg',
+                    'image/png': '.png',
+                    'text/plain': '.txt',
+                }
+                file_extension = mime_to_ext.get(file.content_type, '.bin')
             else:
-                # Генерируем уникальное имя
-                filename = f"{uuid.uuid4().hex}{file_extension}"
+                file_extension = '.bin'
             
-            print(f"DEBUG: Final filename: {filename}")
-            
-            # Определяем папку
-            if confidentiality_level == 0:
-                relative_folder = 'public'
-                save_folder = get_public_folder()
+            # Добавляем расширение к имени
+            base_name = safe_filename
+            safe_filename = f"{base_name}{file_extension}"
+        else:
+            # Уже есть расширение
+            base_name = os.path.splitext(safe_filename)[0]
+        
+        # Определяем папку для сохранения
+        if confidentiality_level == 0:
+            relative_folder = 'public'
+            save_folder = get_public_folder()
+        else:
+            relative_folder = f'department_{department_id}'
+            save_folder = get_department_folder(department_id)
+        
+        # Генерируем окончательное имя файла
+        filename = safe_filename
+        
+        # Проверяем существование и добавляем номер если нужно
+        counter = 1
+        while os.path.exists(os.path.join(save_folder, filename)):
+            name_without_ext = os.path.splitext(filename)[0]
+            ext = os.path.splitext(filename)[1]
+            # Убираем предыдущий номер если есть
+            if '_' in name_without_ext and name_without_ext.split('_')[-1].isdigit():
+                base = '_'.join(name_without_ext.split('_')[:-1])
             else:
-                relative_folder = f'department_{department_id}'
-                save_folder = get_department_folder(department_id)
+                base = name_without_ext
             
-            print(f"DEBUG: Save folder: {save_folder}")
-            
-            # Если заменяем существующий файл
-            if document_id:
+            filename = f"{base}_{counter}{ext}"
+            counter += 1
+            if counter > 100:
+                filename = f"{base}_{uuid.uuid4().hex[:8]}{ext}"
+                break
+        
+        # Если заменяем существующий документ
+        if document_id:
+            try:
                 old_doc = execute_query(
                     "SELECT stored_file_path FROM documents WHERE document_id = %s",
                     (document_id,)
                 )
-                
                 if old_doc and old_doc[0]['stored_file_path']:
                     delete_document_file(old_doc[0]['stored_file_path'])
-            
-            # Сохраняем файл
-            file_path = os.path.join(save_folder, filename)
-            print(f"DEBUG: Full file path: {file_path}")
-            
-            # Важно: сохраняем файл
-            file.save(file_path)
-            
-            # Проверяем, сохранился ли файл
-            if os.path.exists(file_path):
-                print(f"DEBUG: File saved successfully, size: {os.path.getsize(file_path)} bytes")
-            else:
-                print(f"DEBUG: ERROR: File not saved!")
-            
-            # Размер файла
-            file_size = os.path.getsize(file_path)
-            
-            # Относительный путь
-            relative_path = f"{relative_folder}/{filename}"
-            print(f"DEBUG: Relative path for DB: {relative_path}")
-            
-            return relative_path, original_filename, file_size
-            
+            except Exception:
+                pass
+        
+        # Сохраняем файл
+        file_path = os.path.join(save_folder, filename)
+        
+        if hasattr(file, 'seek'):
+            file.seek(0)
+        
+        file.save(file_path)
+        
+        if not os.path.exists(file_path):
+            return None, None, None
+        
+        file_size = os.path.getsize(file_path)
+        relative_path = f"{relative_folder}/{filename}"
+        
+        # ИСПРАВЛЕНО: Возвращаем оригинальное имя (то что видит пользователь) и имя файла на диске
+        return relative_path, original_filename, file_size
+        
     except Exception as e:
         print(f"ERROR in save_document_file: {e}")
-        import traceback
         traceback.print_exc()
     
     return None, None, None
@@ -315,3 +330,19 @@ def validate_uploaded_file(file):
         pass
     
     return True, "OK"
+
+
+def ensure_file_extension(file_name, file_path):
+    """
+    Гарантирует что у файла есть расширение
+    """
+    # Если у имени файла уже есть расширение
+    if os.path.splitext(file_name)[1]:
+        return file_name
+    
+    # Получаем расширение из файла
+    file_ext = os.path.splitext(file_path)[1]
+    if file_ext:
+        return f"{file_name}{file_ext}"
+    
+    return file_name

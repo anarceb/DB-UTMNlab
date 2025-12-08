@@ -51,12 +51,13 @@
     </div>
 </div>
 
-{% if session.user_role == 'auditor' and session.user_dept_id == 4 %}
+<!-- ИСПРАВЛЕНО: Убираем проверку на отдел, теперь все аудиторы могут добавлять документы -->
+{% if session.user_role == 'auditor' %}
 <div class="card mt-4">
     <div class="card-body">
         <div class="actions-grid">
             <a href="{{ url_for('add_document') }}" class="action-btn">
-                Добавить документ
+                📄 Добавить документ
             </a>
         </div>
     </div>

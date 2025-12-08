@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Информация о пользователе</title>
+</head>
+<body>
+    <h1>Отладочная информация</h1>
+    
+    <h2>Информация из сессии:</h2>
+    <table border="1">
+        <tr><th>Параметр</th><th>Значение</th></tr>
+        <tr><td>ID пользователя</td><td>{{ info.user_id }}</td></tr>
+        <tr><td>Имя</td><td>{{ info.user_name }}</td></tr>
+        <tr><td>Email</td><td>{{ info.user_email }}</td></tr>
+        <tr><td>Роль</td><td><strong>{{ info.user_role }}</strong></td></tr>
+        <tr><td>ID отдела</td><td>{{ info.user_dept_id }}</td></tr>
+        <tr><td>Директор?</td><td>{{ info.is_director }}</td></tr>
+        <tr><td>Аутентифицирован</td><td>{{ info.authenticated }}</td></tr>
+    </table>
+    
+    <h2>Документы:</h2>
+    <ul>
+        <li>Документов доступно: {{ info.document_count }}</li>
+        <li>Всего документов в системе: {{ info.total_documents }}</li>
+    </ul>
+    
+    <h2>Проверка:</h2>
+    <p>Если <strong>user_role = 'company_director'</strong>, то должно быть доступно <strong>все {{ info.total_documents }} документов</strong>.</p>
+    
+    <p><a href="{{ url_for('documents_list') }}">Вернуться к документам</a></p>
+</body>
+</html>
