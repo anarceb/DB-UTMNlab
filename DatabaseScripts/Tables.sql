@@ -132,3 +132,4 @@ CREATE TABLE notifications (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE clients ADD COLUMN password TEXT;

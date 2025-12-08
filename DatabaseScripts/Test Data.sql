@@ -84,3 +84,8 @@ INSERT INTO notifications (document_id, changed_by_employee_id, change_descripti
 (6, 1, 'Добавлены новые условия страхования'),
 
 (7, 1, 'Обновлены финансовые показатели');
+
+UPDATE clients SET password = '123456' WHERE client_id = 1;
+UPDATE clients SET password = '111111' WHERE client_id = 2;
+UPDATE clients SET password = 'qwerty' WHERE client_id = 3;
+UPDATE clients SET password = 'password' WHERE client_id = 4;
